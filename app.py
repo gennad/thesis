@@ -4,31 +4,26 @@ s1 = 'line Ä, 궯, 奠 end'
 s2 = 'line Ä, 궯, end' 
 print(type(s1),s1)
 
+import nltk
+
 s1 = 'line Ä, 궯, 奠'
 print(type(s1),s1)
 
 import pymorphy2
 morph = pymorphy2.MorphAnalyzer()
 
-
-
 import vk
 import time
 import pickle
 import collections
-
 import sys, codecs
 sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
-
 from nltk.stem.snowball import RussianStemmer
 russian_stemmer = RussianStemmer()
-
 import creds
 
-
-
-#profiles = vkapi('users.get', user_id=790781)
-#print(vkapi.getServerTime())
+from nltk.tokenize import RegexpTokenizer
+regexp_tokenizer = RegexpTokenizer(r'\w+')
 
 
 def get_group_messages(group_id):
@@ -40,9 +35,7 @@ def get_group_messages(group_id):
     if group_id > 0:
         group_id = -group_id
         
-    #m = vkapi('wall.get', owner_id=-37009309, count=100, offset=offset).items()
     m = vkapi('wall.get', owner_id=group_id, count=100, offset=offset)
-    #import ipdb; ipdb.set_trace()
 
     count = int(m['count'])
     offset += 100
@@ -62,15 +55,9 @@ def get_group_messages(group_id):
 
 def save_group_messages(group_id, filename):
     data = [i for i in get_group_messages(group_id) if i.strip()]
-    #import ipdb; ipdb.set_trace()
     output = open(filename, 'wb')
     pickle.dump(data, output)
 
-RASHKA_GROUP_ID = 37009309
-#save_group_messages(RASHKA_GROUP_ID, 'vatnik')
-
-ANDROID_INSIDER_GROUP_ID = 47433299
-#save_group_messages(ANDROID_INSIDER_GROUP_ID, 'android')
 
 from nltk.corpus import stopwords
 
@@ -82,6 +69,7 @@ def bag_of_non_stopwords(words, stopfile='russian'):
 def bag_of_words(words):
     dict = {}
     for word in words:
+        if len(word) < 4: continue
         #normal_form = morph.parse(word)[0].normal_form
         normal_form = russian_stemmer.stem(word)
         dict[normal_form] = True
@@ -130,89 +118,84 @@ def split_label_feats(lfeats, split=0.75):
 
 
 
+punkt_tokenizer = nltk.tokenize.PunktSentenceTokenizer()
+
+
 def analyze():
     # coding: utf-8
     import pickle
     import nltk
 
-    android = pickle.load(open('android', 'rb'))
-    vatnik = pickle.load(open('vatnik', 'rb'))
-
-    punkt_tokenizer = nltk.tokenize.PunktSentenceTokenizer()
-    android = [punkt_tokenizer.tokenize(sentence) for sentence in android]
-    vatnik = [punkt_tokenizer.tokenize(sentence) for sentence in vatnik]
-
-    #android = [i[:-1] for i in android]
-    #vatnik = [i[:-1] for i in vatnik]
-
-    android = [item.lower() for sublist in android for item in sublist]
-    vatnik = [item.lower() for sublist in vatnik for item in sublist]
-
-
-    from nltk.tokenize import RegexpTokenizer
-
-    regexp_tokenizer = RegexpTokenizer(r'\w+')
-    regexp_tokenizer.tokenize('Eighty-seven miles to go, yet.  Onward!')
-
-    #white_space_tokenizer = nltk.tokenize.WhitespaceTokenizer()
-
-    android = [regexp_tokenizer.tokenize(i) for i in android]
-    vatnik = [regexp_tokenizer.tokenize(i) for i in vatnik]
-
-
-    android_feats = label_feats_from_corpus(android, 'android')
-    vatnik_feats = label_feats_from_corpus(vatnik, 'vatnik')
-
-
-
-
-
-
-    #bag_android = bag_of_words(android)
-    #bag_vatnik = bag_of_words(vatnik)
-
     dct = dict(
-        vatnik=vatnik_feats,
-        android=android_feats
+        android=pickle.load(open('android', 'rb'))[:400],
+        vatnik=pickle.load(open('vatnik', 'rb'))[:400],
+        kinomania=pickle.load(open('kinomania', 'rb'))[:400],
+        vk_science=pickle.load(open('vk_science', 'rb'))[:400]
     )
+
+
+    for key, sentences in dct.items():
+        dct[key] = [punkt_tokenizer.tokenize(sentence) for sentence in sentences]
+        dct[key] = [item.lower() for sublist in dct[key] for item in sublist]
+        dct[key] = [regexp_tokenizer.tokenize(i) for i in dct[key]]
+        dct[key] = label_feats_from_corpus(dct[key], key)
+
 
     train_feats, test_feats = split_label_feats(dct)
 
     import ipdb; ipdb.set_trace()
     print (len(train_feats))
-    print (len(test_feats))
+    #print (len(test_feats))
 
     from nltk.classify import NaiveBayesClassifier
     nb_classifier = NaiveBayesClassifier.train(train_feats)
-    import ipdb; ipdb.set_trace()
+
 
     print (nb_classifier.labels())
     from nltk.classify.util import accuracy
     print ('accuracy', accuracy(nb_classifier, test_feats))
+    nb_classifier.show_most_informative_features(20)
+    return nb_classifier
 
 
+classifier = analyze()
+
+RASHKA_GROUP_ID = 37009309
+#save_group_messages(RASHKA_GROUP_ID, 'vatnik')
+
+ANDROID_INSIDER_GROUP_ID = 47433299
+#save_group_messages(ANDROID_INSIDER_GROUP_ID, 'android')
+
+KINOMANIA_GROUP_ID = 43215063
+#save_group_messages(KINOMANIA_GROUP_ID, 'kinomania')
+
+VK_SCIENCE_GROUP_ID = 29559271
+#save_group_messages(VK_SCIENCE_GROUP_ID, 'vk_science')
+
+def get_list_of_feed():
+    vkapi = vk.API(app_id=creds.APP_ID, user_login='gennad.zlobin@googlemail.com', user_password=creds.USER_PASSWORD, access_token=creds.APP_SECRET, timeout=10, scope='offline,friends,wall,groups,notifications')
+    result = vkapi('newsfeed.get', filters='post')
+    lst = []
+    for msg in result['items']:
+        lst.append(msg['text'])
+    return lst
+
+lst = get_list_of_feed()
 
 
+def classify_feed(lst, classifier):
+
+    #lst = [punkt_tokenizer.tokenize(sentence) for sentence in lst]
+    #lst = [item.lower() for sublist in lst for item in sublist]
+    lst = [item.lower() for item in lst]
+    lst = [regexp_tokenizer.tokenize(i) for i in lst]
 
 
-
-    a = 1
-
-
-analyze()
+    for i in lst:
+        print (classifier.classify(bag_of_words(i)))
+        print (i)
 
 
+classify_feed(lst, classifier)
 
-
-
-
-
-
-
-"""
-output = open('vatnik', 'r')
-txt = pickle.load(output)
-import ipdb; ipdb.set_trace()
-a = 1
-"""
 
