@@ -1,13 +1,8 @@
 # -*- coding: utf-8 -*- 
 
-s1 = 'line Ä, 궯, 奠 end' 
-s2 = 'line Ä, 궯, end' 
-print(type(s1),s1)
 
 import nltk
 
-s1 = 'line Ä, 궯, 奠'
-print(type(s1),s1)
 
 import pymorphy2
 morph = pymorphy2.MorphAnalyzer()
@@ -21,21 +16,93 @@ sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
 from nltk.stem.snowball import RussianStemmer
 russian_stemmer = RussianStemmer()
 import creds
+import os
 
 from nltk.tokenize import RegexpTokenizer
 regexp_tokenizer = RegexpTokenizer(r'\w+')
 
 
-def get_group_messages(group_id):
-    vkapi = vk.API(creds.APP_ID, 'gennad.zlobin@gmail.com', creds.APP_SECRET, timeout=10)
+
+publics = {
+    'auto': [
+        'typical_motorcyclist',
+        'moto_msk'
+
+    ],
+    'sport': [
+        'ligatv',
+        'olympicsrus',
+        'sportexpress'
+    ],
+    'travel': [
+        'natgeoru',
+        'goodtravels'
+    ],
+
+    'hightech': [
+        'icommunity',
+        'androidinsider',
+        'habr'
+    ],
+    'science': [
+        'obrazovach',
+        'nakedsci',
+        'postnauka',
+    ],
+    'city': [
+        'moyamsk',
+        'piter',
+        'blognsk'
+    ],
+    'english': [
+        'beginenglish_ru',
+        'luv_english',
+        'english_is_fun'
+    ],
+    'politics_pro_ukr': [
+        'westernclub',
+        'public_rushka'
+    ],
+    'news': [
+        '1tvnews',
+        'kpru',
+        'ria'
+    ],
+    'movies': [
+        'hd_kino_mania'
+    ]
+}
+
+
+
+
+
+
+def get_group_messages(group_id, limit):
+    #vkapi = vk.API(app_id=creds.APP_ID, user_login='gennad.zlobin@googlemail.com', user_password=creds.USER_PASSWORD, access_token=creds.APP_SECRET, timeout=10, scope='offline,friends,wall,groups,notifications')
+    #vkapi = vk.API(app_id=creds.APP_ID,  access_token=creds.APP_SECRET, timeout=10, scope='offline,friends,wall,groups,notifications', user_login='gennad.zlobin@googlemail.com')
+
+    vkapi = vk.API(app_id=creds.APP_ID, user_login='gennad.zlobin@googlemail.com', user_password=creds.USER_PASSWORD, access_token=creds.APP_SECRET, timeout=10, scope='offline,friends,wall,groups,notifications')
 
     offset = 0
 
-    group_id = int(group_id)
-    if group_id > 0:
+    screen_name = group_id
+
+    try:
+        group_id = vkapi('groups.getById', group_id=group_id)[0]['id']
+    except vk.api.VkAPIMethodError as e:
+        #import ipdb; ipdb.set_trace()
+        print (screen_name, group_id)
+
+    if isinstance(group_id, int) and group_id > 0:
         group_id = -group_id
-        
-    m = vkapi('wall.get', owner_id=group_id, count=100, offset=offset)
+
+    try:
+        m = vkapi('wall.get', owner_id=group_id, count=100, offset=offset)
+    except vk.api.VkAPIMethodError as e:
+        #import ipdb; ipdb.set_trace()
+        print (screen_name, group_id)
+        print (123)
 
     count = int(m['count'])
     offset += 100
@@ -43,7 +110,7 @@ def get_group_messages(group_id):
     for i in m['items']:
         yield i['text']
 
-    while offset < count:
+    while offset < min(count, limit):
         m = vkapi('wall.get', owner_id=group_id, count=100, offset=offset)
         #_ = int(next(m)[1])
 
@@ -57,6 +124,30 @@ def save_group_messages(group_id, filename):
     data = [i for i in get_group_messages(group_id) if i.strip()]
     output = open(filename, 'wb')
     pickle.dump(data, output)
+
+
+
+
+def cache_publics():
+    for name, screen_names in publics.items():
+        if os.path.exists(name):
+            continue
+
+        messages = []
+        #import ipdb; ipdb.set_trace()
+
+        for screen_name in screen_names:
+            limit = 300
+
+            for i in get_group_messages(screen_name, limit):
+                if i.strip():
+                    messages.append(i)
+
+        output = open(name, 'wb')
+        pickle.dump(messages, output)
+
+cache_publics()
+
 
 
 from nltk.corpus import stopwords
@@ -126,12 +217,12 @@ def analyze():
     import pickle
     import nltk
 
-    dct = dict(
-        android=pickle.load(open('android', 'rb'))[:400],
-        vatnik=pickle.load(open('vatnik', 'rb'))[:400],
-        kinomania=pickle.load(open('kinomania', 'rb'))[:400],
-        vk_science=pickle.load(open('vk_science', 'rb'))[:400]
-    )
+    dct = {}
+
+    for name, screen_names in publics.items():
+        pickled = pickle.load(open(name, 'rb'))[:400],
+        #import ipdb; ipdb.set_trace()
+        dct[name] = pickled[0]
 
 
     for key, sentences in dct.items():
@@ -157,45 +248,60 @@ def analyze():
     nb_classifier.show_most_informative_features(20)
     return nb_classifier
 
+vkapi = vk.API(app_id=creds.APP_ID, user_login='gennad.zlobin@googlemail.com', user_password=creds.USER_PASSWORD, access_token=creds.APP_SECRET, timeout=10, scope='offline,friends,wall,groups,notifications')
+
 
 classifier = analyze()
 
-RASHKA_GROUP_ID = 37009309
-#save_group_messages(RASHKA_GROUP_ID, 'vatnik')
-
-ANDROID_INSIDER_GROUP_ID = 47433299
-#save_group_messages(ANDROID_INSIDER_GROUP_ID, 'android')
-
-KINOMANIA_GROUP_ID = 43215063
-#save_group_messages(KINOMANIA_GROUP_ID, 'kinomania')
-
-VK_SCIENCE_GROUP_ID = 29559271
-#save_group_messages(VK_SCIENCE_GROUP_ID, 'vk_science')
 
 def get_list_of_feed():
     vkapi = vk.API(app_id=creds.APP_ID, user_login='gennad.zlobin@googlemail.com', user_password=creds.USER_PASSWORD, access_token=creds.APP_SECRET, timeout=10, scope='offline,friends,wall,groups,notifications')
-    result = vkapi('newsfeed.get', filters='post')
+    result = vkapi('newsfeed.get', filters='post', count=100)
     lst = []
     for msg in result['items']:
-        lst.append(msg['text'])
+        lst.append((msg['text'], msg['source_id']))
+
+
+    result = vkapi('newsfeed.get', filters='post', count=100, new_offset=100)
+    for msg in result['items']:
+        lst.append((msg['text'], msg['source_id']))
+
+    result = vkapi('newsfeed.get', filters='post', count=100, new_offset=200)
+    for msg in result['items']:
+        lst.append((msg['text'], msg['source_id']))
+
     return lst
 
-lst = get_list_of_feed()
+
 
 
 def classify_feed(lst, classifier):
 
     #lst = [punkt_tokenizer.tokenize(sentence) for sentence in lst]
     #lst = [item.lower() for sublist in lst for item in sublist]
-    lst = [item.lower() for item in lst]
-    lst = [regexp_tokenizer.tokenize(i) for i in lst]
+    lst = [(msg.lower(), source_id) for msg, source_id in lst]
+    lst = [(regexp_tokenizer.tokenize(i), source_id) for i, source_id in lst]
+
+    res = collections.defaultdict(list)
 
 
-    for i in lst:
-        print (classifier.classify(bag_of_words(i)))
+    for i, source_id in lst:
+        if not i:
+            continue
+
+        category = classifier.classify(bag_of_words(i))
+        print (category)
         print (i)
 
+        res[source_id].append(category)
 
+    print (res)
+    import ipdb; ipdb.set_trace()
+    for i, j in res.items():
+        time.sleep(1)
+        screen_name = vkapi('groups.getById', group_id=abs(i))[0]['screen_name']
+        print (screen_name, max(j))
+
+lst = get_list_of_feed()
 classify_feed(lst, classifier)
-
 
