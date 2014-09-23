@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*- 
 
-
 import nltk
-
 
 import pymorphy2
 morph = pymorphy2.MorphAnalyzer()
@@ -32,9 +30,15 @@ from nltk import metrics
 import pickle
 import ipdb
 
-from nltk.classify import MultiClassifierI
+
 from nltk.classify.megam import config_megam
 
+
+MAX_POSTS = 500
+
+from classifiers import MultiBinaryClassifier
+
+#access_token = creds.get_access_token()
 
 
 publics = {
@@ -87,7 +91,9 @@ publics = {
     ]
 }
 
-vkapi = vk.API(app_id=creds.APP_ID, user_login='gennad.zlobin@googlemail.com', user_password=creds.USER_PASSWORD, access_token=creds.APP_SECRET, timeout=10, scope='offline,friends,wall,groups,notifications')
+#vkapi = vk.API(app_id=creds.APP_ID, user_login='gennad.zlobin@googlemail.com', user_password=creds.USER_PASSWORD, access_token=creds.APP_SECRET, timeout=10, scope='offline,friends,wall,groups,notifications')
+
+vkapi = vk.API(access_token=creds.ACCESS_TOKEN)
 
 
 
@@ -96,6 +102,8 @@ punkt_tokenizer = nltk.tokenize.PunktSentenceTokenizer()
 
 def get_user_messages(screen_name_or_user_id, limit):
     offset = 0
+
+    ipdb.set_trace()
 
     try:
         m = vkapi('wall.get', owner_id=screen_name_or_user_id, count=100, offset=offset)
@@ -110,14 +118,16 @@ def get_user_messages(screen_name_or_user_id, limit):
     offset += 100
 
     for i in m['items']:
-        yield i['text']
+        if i['text']:
+            yield i['text']
         #print( i['text'])
 
     while offset < min(count, limit):
         m = vkapi('wall.get', owner_id=screen_name_or_user_id, count=100, offset=offset)
         #_ = int(next(m)[1])
         for i in m['items']:
-            yield i['text']
+            if i['text']:
+                yield i['text']
             #print (i['text'])
         offset += 100
         time.sleep(3)
@@ -301,7 +311,7 @@ def get_feats2():
     dct = {}
 
     for name, screen_names in publics.items():
-        pickled = pickle.load(open(name, 'rb'))[:400],
+        pickled = pickle.load(open(name, 'rb'))[:MAX_POSTS],
         dct[name] = pickled[0]  # [1] contains nothing
 
 
@@ -338,6 +348,7 @@ def get_list_of_feed():
 
 
 def classify_feed(lst, classifier):
+    import ipdb; ipdb.set_trace()
 
     #lst = [punkt_tokenizer.tokenize(sentence) for sentence in lst]
     #lst = [item.lower() for sublist in lst for item in sublist]
@@ -469,7 +480,7 @@ def reuters_high_info_words(score_fn=BigramAssocMeasures.chi_sq):
     categories_to_messages = collections.defaultdict(list)
 
     for name, screen_names in publics.items():
-        pickled = pickle.load(open(name, 'rb'))[:400],
+        pickled = pickle.load(open(name, 'rb'))[:MAX_POSTS],
         list_of_messages = pickled[0] # [1] contains nothing
 
         for msg in list_of_messages:
@@ -499,7 +510,7 @@ def reuters_train_test_feats(feature_detector=bag_of_words):
     categories_to_messages = collections.defaultdict(list)
 
     for name, screen_names in publics.items():
-        pickled = pickle.load(open(name, 'rb'))[:400],
+        pickled = pickle.load(open(name, 'rb'))[:MAX_POSTS],
         list_of_messages = pickled[0] # [1] contains nothing
 
         for msg in list_of_messages:
@@ -561,25 +572,6 @@ def train_binary_classifiers(trainf, labelled_feats, labelset):
 
 
 
-class MultiBinaryClassifier(MultiClassifierI):
-    def __init__(self, *label_classifiers):
-        self._label_classifiers = dict(label_classifiers)
-        self._labels = sorted(self._label_classifiers.keys())
-
-    def labels(self):
-        return self._labels
-
-    def classify(self, feats):
-        lbls = set()
-
-        for label, classifier in self._label_classifiers.items():
-            if classifier.classify(feats) == label:
-                lbls.add(label)
-
-        return lbls
-
-
-
 
 
 def multi_metrics(multi_classifier, test_feats):
@@ -613,72 +605,45 @@ def multi_metrics(multi_classifier, test_feats):
 
 if __name__ == '__main__':
 
-    st = str('/usr/local/bin/megam')
+    MULTI_CLASSIFIER_NAME = 'multi_classifier'
+    if not os.path.exists(MULTI_CLASSIFIER_NAME):
+        st = str('/usr/local/bin/megam')
+        import ipdb; ipdb.set_trace()
+        config_megam(st)
+
+
+        rwords = reuters_high_info_words()
+        featdet = lambda words: bag_of_words_in_set(words, rwords)
+        multi_train_feats, multi_test_feats = reuters_train_test_feats(featdet)
+
+        trainf = lambda train_feats: MaxentClassifier.train(train_feats, algorithm='megam', trace=0, max_iter=10)
+        #labelset = set(reuters.categories())
+        labelset = set(list(publics.keys()))
+        classifiers = train_binary_classifiers(trainf, multi_train_feats, labelset)
+        len(classifiers)
+
+        multi_classifier = MultiBinaryClassifier(*classifiers.items())
+
+        output = open(MULTI_CLASSIFIER_NAME, 'wb')
+        import ipdb; ipdb.set_trace()
+        pickle.dump(multi_classifier, output)
+
+        multi_precisions, multi_recalls, avg_md = multi_metrics(multi_classifier, multi_test_feats)
+        print (avg_md)
+        print (multi_precisions)
+        print (multi_recalls)
+    else:
+        multi_classifier = pickle.load(open(MULTI_CLASSIFIER_NAME, 'rb'))
+
+    #ipdb.set_trace()
+
+    #cache_publics()
+    #train_feats, test_feats = get_feats2()
+
     import ipdb; ipdb.set_trace()
-    config_megam(st)
+    a = [(i, 1) for i in get_user_messages('4356905', 500)]
 
-
-    rwords = reuters_high_info_words()
-    featdet = lambda words: bag_of_words_in_set(words, rwords)
-    multi_train_feats, multi_test_feats = reuters_train_test_feats(featdet)
-
-    trainf = lambda train_feats: MaxentClassifier.train(train_feats, algorithm='megam', trace=0, max_iter=10)
-    #labelset = set(reuters.categories())
-    labelset = set(list(publics.keys()))
-    classifiers = train_binary_classifiers(trainf, multi_train_feats, labelset)
-
-    len(classifiers)
-
-
-    multi_classifier = MultiBinaryClassifier(*classifiers.items())
-
-    multi_precisions, multi_recalls, avg_md = multi_metrics(multi_classifier, multi_test_feats)
-    print (avg_md)
-
-    print (multi_precisions)
-    print (multi_recalls)
-
-    ipdb.set_trace()
-
-
-    cache_publics()
-    train_feats, test_feats = get_feats2()
-
-
-
-
-
-    from classification import train_binary_classifiers
-
-
-
-
-
-
-
-    from nltk.corpus import movie_reviews
-
-    labels = movie_reviews.categories()
-    labeled_words = [(l, movie_reviews.words(categories=[l])) for l in labels]
-    high_info_words = set(high_information_words(labeled_words))
-    feat_det = lambda words: bag_of_words_in_set(words, high_info_words)
-    lfeats = label_feats_from_corpus(movie_reviews, feature_detector=feat_det)
-    train_feats, test_feats = split_label_feats(lfeats)
-
-
-    nb_classifier = NaiveBayesClassifier.train(train_feats)
-    print ('high info nb', accuracy(nb_classifier, test_feats) )
-    nb_prec, nb_rec = precision_recall(nb_classifier, test_feats)
-
-    print ('prec', nb_prec)
-    print ('rec', nb_rec)
-
-    me_class = MaxentClassifier.train(train_feats, algorithm='megam', trace=0, max_iter=10)
-    print ('high info nb', accuracy(me_class, test_feats))
-    nb_prec, nb_rec = precision_recall(me_class, test_feats)
-
-    a = [(i, 1) for i in get_user_messages('4356905', 100)]
-    classify_feed(a, me_classifier)
+    classify_feed(a, multi_classifier)
 
     lst = get_list_of_feed()
     classify_feed(lst, me_classifier)
