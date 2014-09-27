@@ -29,12 +29,14 @@ import collections
 from nltk import metrics
 import pickle
 import ipdb
+import numpy as np
 
 
 from nltk.classify.megam import config_megam
 
 
-MAX_POSTS = 500
+#MAX_POSTS = 500
+MAX_POSTS = 5000
 
 from classifiers import MultiBinaryClassifier
 
@@ -50,7 +52,8 @@ publics = {
     'sport': [
         'ligatv',
         'olympicsrus',
-        'sportexpress'
+        'sportexpress',
+        'sports_is_life'
     ],
     'travel': [
         'natgeoru',
@@ -60,7 +63,8 @@ publics = {
     'hightech': [
         'icommunity',
         'androidinsider',
-        'habr'
+        'habr',
+        'yandex'
     ],
     'science': [
         'obrazovach',
@@ -77,9 +81,10 @@ publics = {
         'luv_english',
         'english_is_fun'
     ],
-    'politics_pro_ukr': [
+    'politics': [
         'westernclub',
-        'public_rushka'
+        'public_rushka',
+        'rospil'
     ],
     'news': [
         '1tvnews',
@@ -87,8 +92,41 @@ publics = {
         'ria'
     ],
     'movies': [
-        'hd_kino_mania'
-    ]
+        'hd_kino_mania',
+        'amovies'
+    ],
+    'cooking': [
+        'chief.cooker',
+        'vk.cooking',
+        'eda_ru'
+    ],
+    'relations': [
+        'm_love_is',
+        'vk.relations'
+    ],
+    'shops': [
+        'jesari',
+        'onlineshopingr'
+    ],
+    'home': [
+        'aidacha',
+        'rem_shkola',
+        'romantika_for_you'
+    ],
+    'family': [
+        'public26705092',
+        'psy.people'
+         'vk.children'
+    ],
+    'afisha': [
+        'afisha',
+        'anonsparty'
+    ],
+    'business': [
+        'business_inside',
+        'casebusiness',
+        'businessstrategy'
+    ],
 }
 
 #vkapi = vk.API(app_id=creds.APP_ID, user_login='gennad.zlobin@googlemail.com', user_password=creds.USER_PASSWORD, access_token=creds.APP_SECRET, timeout=10, scope='offline,friends,wall,groups,notifications')
@@ -103,7 +141,6 @@ punkt_tokenizer = nltk.tokenize.PunktSentenceTokenizer()
 def get_user_messages(screen_name_or_user_id, limit):
     offset = 0
 
-    ipdb.set_trace()
 
     try:
         m = vkapi('wall.get', owner_id=screen_name_or_user_id, count=100, offset=offset)
@@ -118,17 +155,42 @@ def get_user_messages(screen_name_or_user_id, limit):
     offset += 100
 
     for i in m['items']:
-        if i['text']:
-            yield i['text']
+        if not 'copy_history' in i:
+            continue
+
+        owner_id = i['copy_history'][0]['from_id']
+        if not owner_id: 
+            continue
+
+        if owner_id < 0:
+            txt = i['copy_history'][0]['text']
+            if txt:
+        #if i['text']:
+                yield txt
         #print( i['text'])
 
     while offset < min(count, limit):
         m = vkapi('wall.get', owner_id=screen_name_or_user_id, count=100, offset=offset)
         #_ = int(next(m)[1])
         for i in m['items']:
+            if not 'copy_history' in i:
+                continue
+
+            owner_id = i['copy_history'][0]['from_id']
+            if not owner_id: 
+                continue
+
+            if owner_id < 0:
+                txt = i['copy_history'][0]['text']
+                if txt:
+                #if i['text']:
+                     yield txt
+
+            """
             if i['text']:
                 yield i['text']
             #print (i['text'])
+            """
         offset += 100
         time.sleep(3)
 
@@ -160,17 +222,26 @@ def get_group_messages(group_id, limit):
         return
 
     count = int(m['count'])
-    offset += 100
+    #offset += 100
 
     for i in m['items']:
-        yield i['text']
+        txt = i['text']
+        if len(txt) > 100:
+            offset += 1
+            yield txt
+            if offset>=limit: return
 
     while offset < min(count, limit):
         m = vkapi('wall.get', owner_id=group_id, count=100, offset=offset)
         #_ = int(next(m)[1])
 
         for i in m['items']:
-            yield i['text']
+            txt = i['text']
+            if len(txt) > 100:
+                offset += 1
+                yield txt
+                if offset>=limit: return
+
         offset += 100
         time.sleep(3)
 
@@ -194,7 +265,7 @@ def cache_publics():
             limit = 300
 
             for i in get_group_messages(screen_name, limit):
-                if i.strip():
+                if i.strip() and len(i.strip()) > 100:
                     messages.append(i)
 
         output = open(name, 'wb')
@@ -331,15 +402,18 @@ def get_list_of_feed():
     result = vkapi('newsfeed.get', filters='post', count=100)
     lst = []
     for msg in result['items']:
+        if not msg['text']: continue
         lst.append((msg['text'], msg['source_id']))
 
 
     result = vkapi('newsfeed.get', filters='post', count=100, new_offset=100)
     for msg in result['items']:
+        if not msg['text']: continue
         lst.append((msg['text'], msg['source_id']))
 
     result = vkapi('newsfeed.get', filters='post', count=100, new_offset=200)
     for msg in result['items']:
+        if not msg['text']: continue
         lst.append((msg['text'], msg['source_id']))
 
     return lst
@@ -462,6 +536,33 @@ def high_information_words(labelled_words, score_fn=BigramAssocMeasures.chi_sq, 
         bestwords = [word for word, score in words_scores.items() if score >= min_score]
         high_info_words |= set(bestwords)
     return high_info_words
+
+
+def get_corpus_for_sp():
+    categories_to_features = collections.defaultdict(dict)
+    categories_to_words = collections.defaultdict(list)
+    categories_to_high_info_words = collections.defaultdict(set)
+    categories_to_messages = collections.defaultdict(list)
+
+    for name, screen_names in publics.items():
+        pickled = pickle.load(open(name, 'rb'))[:MAX_POSTS],
+        list_of_messages = pickled[0] # [1] contains nothing
+
+        for msg in list_of_messages:
+            categories_to_messages[name].append(msg)
+
+            list_of_sentences = punkt_tokenizer.tokenize(msg)
+            list_of_words_list = [regexp_tokenizer.tokenize(sentence) for sentence in list_of_sentences]
+
+            for list_of_words in list_of_words_list:
+                categories_to_words[name].extend(list_of_words)
+
+            list_of_words_dicts = label_feats_from_corpus(list_of_words_list)
+
+            for dct in list_of_words_dicts:
+                categories_to_features[name].update(dct)
+
+    return categories_to_messages
 
 
 
@@ -603,9 +704,75 @@ def multi_metrics(multi_classifier, test_feats):
 
 
 
+
+
+
+
+def evaluate_cross_validataion(clf, x, y, k):
+    cv = KFold(len(y), k, shuffle = True, random_state=0)
+    scores = cross_val_score(clf, x, y, cv=cv)
+    print(scores)
+    print ('mean score: {0:.3f} (+/- {1:.3f})'.format(np.mean(scores), sem(scores)))
+
+
+def evaluate_cross_validataion(clf, x, y, k):
+    cv = KFold(len(y), k, shuffle = True, random_state=0)
+    scores = cross_val_score(clf, x, y, cv=cv)
+    print(scores)
+    print ('mean score: {0:.3f} (+/- {1:.3f})').format(np.mean(scores), sem(scores))
+
+
+
+def evaluate_cross_validataion(clf, x, y, k):
+    cv = KFold(len(y), k, shuffle = True, random_state=0)
+    scores = cross_val_score(clf, x, y, cv=cv)
+    print(scores)
+    print ('mean score: {0:.3f} (+/- {1:.3f})'.format(np.mean(scores), sem(scores)))
+
+
+def get_friends(user_id):
+    result = vkapi('friends.get', user_id=user_id)
+    return result['items']
+
+def get_groups(user_id):
+    result = vkapi('groups.get', user_id=user_id)
+    return result['items'][:5]
+
+
 if __name__ == '__main__':
 
+
+
+    cache_publics()
+
     MULTI_CLASSIFIER_NAME = 'multi_classifier'
+
+    res = get_corpus_for_sp()
+
+    from sklearn.naive_bayes import MultinomialNB
+    from sklearn.pipeline import Pipeline
+    from sklearn.feature_extraction.text import TfidfVectorizer, HashingVectorizer, CountVectorizer
+    clf_1 = Pipeline([('vect', CountVectorizer()), ('clf', MultinomialNB()),])
+    clf_2 = Pipeline([('vect', HashingVectorizer(non_negative=True)), ('clf', MultinomialNB()),])
+    clf_3 = Pipeline([('vect', TfidfVectorizer()), ('clf', MultinomialNB()),])
+    from sklearn.cross_validation import cross_val_score, KFold
+    from scipy.stats import sem
+    clfs = [clf_1, clf_2, clf_3]
+
+
+    data, target = [], []
+    for category, posts_list in res.items():
+        for post in posts_list:
+            data.append(post)
+            target.append(category)
+
+
+    import ipdb; ipdb.set_trace()
+    for clf in clfs:
+        evaluate_cross_validataion(clf, data, target, 5)
+    import ipdb; ipdb.set_trace()
+
+
     if not os.path.exists(MULTI_CLASSIFIER_NAME):
         st = str('/usr/local/bin/megam')
         import ipdb; ipdb.set_trace()
@@ -625,7 +792,6 @@ if __name__ == '__main__':
         multi_classifier = MultiBinaryClassifier(*classifiers.items())
 
         output = open(MULTI_CLASSIFIER_NAME, 'wb')
-        import ipdb; ipdb.set_trace()
         pickle.dump(multi_classifier, output)
 
         multi_precisions, multi_recalls, avg_md = multi_metrics(multi_classifier, multi_test_feats)
@@ -635,12 +801,9 @@ if __name__ == '__main__':
     else:
         multi_classifier = pickle.load(open(MULTI_CLASSIFIER_NAME, 'rb'))
 
-    #ipdb.set_trace()
 
-    #cache_publics()
     #train_feats, test_feats = get_feats2()
 
-    import ipdb; ipdb.set_trace()
     a = [(i, 1) for i in get_user_messages('4356905', 500)]
 
     classify_feed(a, multi_classifier)
